@@ -77,24 +77,36 @@ echo "Downloading baksmali..."
 curl -sSL -o baksmali.jar https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar || curl -sSL -o baksmali.jar https://repo1.maven.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar
 java -jar baksmali.jar d d8_out/classes.dex -o d8_smali
 
-echo "=== Step 5: Injecting hook into X509Util.smali ==="
+echo "=== Step 5: Finding X509 verification class and injecting hook ==="
 python3 - << 'PYEOF'
 import os
+import re
 import shutil
 
 target_file = None
+# Scan all smali files to locate the class containing cr_X509Util or checkServerTrusted
 for root, dirs, files in os.walk("apk_unpacked"):
-    if "X509Util.smali" in files:
-        target_file = os.path.join(root, "X509Util.smali")
+    for file in files:
+        if file.endswith(".smali"):
+            path = os.path.join(root, file)
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    if "cr_X509Util" in content or "checkServerTrusted([[B" in content or "checkServerTrusted" in content:
+                        if "AndroidCertVerifyResult" in content:
+                            target_file = path
+                            print(f"Matched target verification smali file: {target_file}")
+                            break
+            except Exception as e:
+                pass
+    if target_file:
         break
 
 if not target_file:
-    raise Exception("X509Util.smali not found!")
+    raise Exception("Certificate verification smali file not found in apk_unpacked!")
 
-dest_dir = os.path.dirname(target_file)
-print(f"Target X509Util file: {target_file}")
-print(f"Target destination directory: {dest_dir}")
-
+dest_dir = os.path.join("apk_unpacked", "smali", "org", "chromium", "net")
+os.makedirs(dest_dir, exist_ok=True)
 for root, dirs, files in os.walk("d8_smali"):
     for file in files:
         if file.startswith("EMudhraPinChecker"):
@@ -103,30 +115,32 @@ for root, dirs, files in os.walk("d8_smali"):
             shutil.copy(src, dst)
             print(f"Copied {src} -> {dst}")
 
-with open(target_file, "r") as f:
+with open(target_file, "r", encoding="utf-8") as f:
     lines = f.readlines()
 
 out_lines = []
-in_check_server_trusted = False
+in_target_method = False
 hook_injected = False
 hook = "    invoke-static {p0}, Lorg/chromium/net/EMudhraPinChecker;->checkCompromised([[B)V\n"
 
 for line in lines:
     out_lines.append(line)
-    if "checkServerTrusted([[BLjava/lang/String;Ljava/lang/String;)" in line:
-        in_check_server_trusted = True
-    elif in_check_server_trusted and not hook_injected and (".locals" in line or ".registers" in line):
+    # Match any method taking [[B (cert chain) and returning AndroidCertVerifyResult or checkServerTrusted
+    if re.search(r'\.method.*(checkServerTrusted|\([[BLjava/lang/String;).*AndroidCertVerifyResult;', line):
+        in_target_method = True
+        print(f"Found target method signature: {line.strip()}")
+    elif in_target_method and not hook_injected and (".locals" in line or ".registers" in line):
         out_lines.append(hook)
         hook_injected = True
-        in_check_server_trusted = False
+        in_target_method = False
 
 if not hook_injected:
-    raise Exception("Failed to inject hook into checkServerTrusted!")
+    raise Exception(f"Failed to inject hook into target method in {target_file}!")
 
-with open(target_file, "w") as f:
+with open(target_file, "w", encoding="utf-8") as f:
     f.writelines(out_lines)
 
-print("Successfully injected eMudhra revocation hook into X509Util.smali!")
+print("Successfully injected eMudhra revocation hook into smali!")
 PYEOF
 
 echo "=== Step 6: Repacking and Signing APK ==="
