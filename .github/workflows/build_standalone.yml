@@ -26,7 +26,12 @@ jobs:
       - name: Install System Tools & Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git curl python3 openjdk-11-jdk-headless libncurses5 ccache ninja-build jq
+          sudo apt-get install -y git curl unzip python3 openjdk-11-jdk-headless libncurses5 ccache ninja-build jq generate-ninja
+          # Ensure standalone gn binary is installed in /usr/local/bin
+          curl -sSL -o /tmp/gn.zip "https://chrome-infra-packages.appspot.com/dl/gn/gn/linux-amd64/+/latest"
+          unzip -o /tmp/gn.zip -d /tmp/gn_bin
+          sudo cp /tmp/gn_bin/gn /usr/local/bin/gn
+          sudo chmod +x /usr/local/bin/gn
 
       - name: Install Depot Tools & Bootstrap
         run: |
@@ -76,7 +81,9 @@ jobs:
           android_default_version_name = "GitPatched"
           android_default_version_code = "1"
           EOF
-          $HOME/depot_tools/gn gen out/android_arm64
+          mkdir -p $HOME/chromium/src/buildtools/linux64
+          cp /usr/local/bin/gn $HOME/chromium/src/buildtools/linux64/gn
+          gn gen out/android_arm64
 
       - name: Compile ChromePublic APK
         run: |
