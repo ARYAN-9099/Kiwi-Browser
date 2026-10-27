@@ -1,0 +1,82 @@
+name: 'Build Patched Kiwi APK (Standalone)'
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Android APK (arm64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Reclaim Disk Space
+        run: |
+          sudo swapoff -av || true
+          sudo rm -f /swapfile || true
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install System Tools & Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl python3 openjdk-11-jdk-headless libncurses5 ccache ninja-build jq
+
+      - name: Install Depot Tools
+        run: |
+          git clone --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git $HOME/depot_tools
+          echo "$HOME/depot_tools" >> $GITHUB_PATH
+
+      - name: Checkout Patched Kiwi Repository
+        uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Setup Workspace Structure & Dependencies
+        run: |
+          mkdir -p $HOME/chromium
+          cd $HOME/chromium
+          git clone --depth=1 https://github.com/kiwibrowser/dependencies.git .cipd
+          cp .cipd/.gclient .
+          cp .cipd/.gclient_entries .
+          mv $GITHUB_WORKSPACE/src .
+
+      - name: Configure GN Args (.dev package for side-by-side installation)
+        run: |
+          cd $HOME/chromium/src
+          mkdir -p out/android_arm64
+          cat << 'EOF' > out/android_arm64/args.gn
+          target_os = "android"
+          target_cpu = "arm64"
+          is_debug = false
+          is_java_debug = false
+          android_channel = "dev"
+          is_official_build = true
+          is_component_build = false
+          is_clang = true
+          symbol_level = 0
+          blink_symbol_level = 0
+          enable_nacl = false
+          enable_extensions = true
+          proprietary_codecs = true
+          ffmpeg_branding = "Chrome"
+          treat_warnings_as_errors = false
+          disable_android_lint = true
+          android_default_version_name = "GitPatched"
+          android_default_version_code = "1"
+          EOF
+          $HOME/depot_tools/gn gen out/android_arm64
+
+      - name: Compile ChromePublic APK
+        run: |
+          cd $HOME/chromium/src
+          $HOME/depot_tools/autoninja -C out/android_arm64 chrome_public_apk
+
+      - name: Upload Patched APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: com.kiwibrowser.browser.dev-arm64
+          path: $HOME/chromium/src/out/android_arm64/apks/*.apk
