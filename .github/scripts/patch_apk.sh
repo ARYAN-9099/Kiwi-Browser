@@ -24,6 +24,7 @@ package org.chromium.net;
 
 import java.io.ByteArrayInputStream;
 import java.security.MessageDigest;
+import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 
@@ -39,8 +40,8 @@ public class EMudhraPinChecker {
         "ec4ffa1ad0ac88081314b7aaffef6a91f97cd57291bb5ba686c5415f5eb4f6b6"
     };
 
-    public static boolean isCompromised(byte[][] certChainBytes) {
-        if (certChainBytes == null) return false;
+    public static void checkCompromised(byte[][] certChainBytes) throws CertificateException {
+        if (certChainBytes == null) return;
         try {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -56,27 +57,30 @@ public class EMudhraPinChecker {
                 String spkiHex = sb.toString();
                 for (String blocked : BLOCKED_SPKI_HEX) {
                     if (blocked.equalsIgnoreCase(spkiHex)) {
-                        return true;
+                        throw new CertificateException("Compromised eMudhra intermediate CA rejected (Bugzilla #2083449): " + spkiHex);
                     }
                 }
             }
+        } catch (CertificateException e) {
+            throw e;
         } catch (Throwable ignored) {
         }
-        return false;
     }
 }
 EOF
 
 javac -source 8 -target 8 -d . EMudhraPinChecker.java
+mkdir -p d8_out
 $ANDROID_HOME/build-tools/34.0.0/d8 org/chromium/net/EMudhraPinChecker.class --output d8_out
-curl -sSL -o baksmali.jar https://repo1.maven.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar
+
+echo "Downloading baksmali..."
+curl -sSL -o baksmali.jar https://bitbucket.org/JesusFreke/smali/downloads/baksmali-2.5.2.jar || curl -sSL -o baksmali.jar https://repo1.maven.org/maven2/org/smali/baksmali/2.5.2/baksmali-2.5.2.jar
 java -jar baksmali.jar d d8_out/classes.dex -o d8_smali
-mkdir -p apk_unpacked/smali/org/chromium/net/
-cp -r d8_smali/org/chromium/net/EMudhraPinChecker* apk_unpacked/smali/org/chromium/net/
 
 echo "=== Step 5: Injecting hook into X509Util.smali ==="
 python3 - << 'PYEOF'
 import os
+import shutil
 
 target_file = None
 for root, dirs, files in os.walk("apk_unpacked"):
@@ -87,24 +91,25 @@ for root, dirs, files in os.walk("apk_unpacked"):
 if not target_file:
     raise Exception("X509Util.smali not found!")
 
-print(f"Found target file: {target_file}")
+dest_dir = os.path.dirname(target_file)
+print(f"Target X509Util file: {target_file}")
+print(f"Target destination directory: {dest_dir}")
+
+for root, dirs, files in os.walk("d8_smali"):
+    for file in files:
+        if file.startswith("EMudhraPinChecker"):
+            src = os.path.join(root, file)
+            dst = os.path.join(dest_dir, file)
+            shutil.copy(src, dst)
+            print(f"Copied {src} -> {dst}")
+
 with open(target_file, "r") as f:
     lines = f.readlines()
 
 out_lines = []
 in_check_server_trusted = False
 hook_injected = False
-
-hook = """
-    invoke-static {p0}, Lorg/chromium/net/EMudhraPinChecker;->isCompromised([[B)Z
-    move-result v0
-    if-eqz v0, :cond_emudhra_safe
-    new-instance v0, Ljava/security/cert/CertificateException;
-    const-string v1, "Compromised eMudhra intermediate CA rejected (Bugzilla 2083449)"
-    invoke-direct {v0, v1}, Ljava/security/cert/CertificateException;-><init>(Ljava/lang/String;)V
-    throw v0
-    :cond_emudhra_safe
-"""
+hook = "    invoke-static {p0}, Lorg/chromium/net/EMudhraPinChecker;->checkCompromised([[B)V\n"
 
 for line in lines:
     out_lines.append(line)
