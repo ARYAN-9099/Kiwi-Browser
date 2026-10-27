@@ -4219,4 +4219,50 @@ TEST_F(TransportSecurityStatePinningKillswitchTest, PinningKillswitchSet) {
                 network_isolation_key, &unused_failure_log));
 }
 
+TEST_F(TransportSecurityStateTest, RejectCompromisedEMudhraIntermediates) {
+  const HostPortPair host_port_pair("example.com", 443);
+  const NetworkIsolationKey network_isolation_key;
+  scoped_refptr<X509Certificate> cert1 = GetTestRoot();
+  scoped_refptr<X509Certificate> cert2 = GetTestRoot();
+  TransportSecurityState state;
+  std::string failure_log;
+
+  // All 8 compromised eMudhra intermediate SPKI hashes (October 2026 incident).
+  const char* const kCompromisedSPKIs[] = {
+      "sha256/Q7/6GdbvZRQR9oQeAZkx6W9vLq7/KKtLbxzkV23icXs=",  // EM OV TLS CA - G3B
+      "sha256/Sd01PcS5GaN3BkcRfQ5gwWEV59G8JZ7v5zSwDqQ0/l8=",  // EM DV TLS CA - G3C
+      "sha256/XAZgo7FkkQ2P9YnBjhRVLp4Owjfc7+LLc21BpIEfgaA=",  // EM EV TLS CA - G3C
+      "sha256/Y+zv7kMdSVJ7wRNsTnLQIGpHcIbK9gbNXPAl6GwQnPg=",  // EM OV TLS CA - G3C
+      "sha256/ksBj1n6PFOtx0ojhEmb/2vacvxFee6sU87wvaNJeDjA=",  // EM OV CS CA - G3C
+      "sha256/4CVMf83CZeLw+KQo2rt1q0rgObSHLWLV7lfwfX1aikE=",  // EM EV TLS CA - G3B
+      "sha256/6+1kdcLC2A/LGZ8/6N1uazzmC3frFdTkLD3sDG9bUQU=",  // EM DV TLS CA - G3B
+      "sha256/7E/+GtDKiAgTFLeq/+9qkfV81XKRvluZhsVBX1609rY=",  // EM OV CS CA - G3B
+  };
+
+  for (const char* spki : kCompromisedSPKIs) {
+    HashValueVector hashes;
+    EXPECT_TRUE(AddHash(spki, &hashes));
+    failure_log.clear();
+
+    // Even for an unpinned host, any chain containing a compromised eMudhra key
+    // must be unconditionally rejected.
+    EXPECT_EQ(TransportSecurityState::PKPStatus::VIOLATED,
+              state.CheckPublicKeyPins(
+                  host_port_pair, true, hashes, cert1.get(), cert2.get(),
+                  TransportSecurityState::ENABLE_PIN_REPORTS,
+                  network_isolation_key, &failure_log));
+    EXPECT_FALSE(failure_log.empty());
+  }
+
+  // Clean unrelated certificate hashes must remain completely unaffected (PKPStatus::OK).
+  HashValueVector clean_hashes;
+  EXPECT_TRUE(AddHash("sha256/1111111111111111111111111111111111111111111=", &clean_hashes));
+  failure_log.clear();
+  EXPECT_EQ(TransportSecurityState::PKPStatus::OK,
+            state.CheckPublicKeyPins(
+                host_port_pair, true, clean_hashes, cert1.get(), cert2.get(),
+                TransportSecurityState::ENABLE_PIN_REPORTS,
+                network_isolation_key, &failure_log));
+}
+
 }  // namespace net
