@@ -28,10 +28,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git curl python3 openjdk-11-jdk-headless libncurses5 ccache ninja-build jq
 
-      - name: Install Depot Tools
+      - name: Install Depot Tools & Bootstrap
         run: |
           git clone --depth=1 https://chromium.googlesource.com/chromium/tools/depot_tools.git $HOME/depot_tools
           echo "$HOME/depot_tools" >> $GITHUB_PATH
+          # Bootstrap depot_tools (generates python3_bin_reldir.txt and installs CIPD binaries)
+          $HOME/depot_tools/ensure_bootstrap || true
+          $HOME/depot_tools/gclient || true
 
       - name: Checkout Patched Kiwi Repository
         uses: actions/checkout@v4
@@ -46,6 +49,8 @@ jobs:
           cp .cipd/.gclient .
           cp .cipd/.gclient_entries .
           mv $GITHUB_WORKSPACE/src .
+          cd $HOME/chromium/src
+          $HOME/depot_tools/gclient runhooks || true
 
       - name: Configure GN Args (.dev package for side-by-side installation)
         run: |
