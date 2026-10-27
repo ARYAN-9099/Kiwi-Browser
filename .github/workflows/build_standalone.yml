@@ -1,6 +1,9 @@
 name: 'Build Patched Kiwi APK (Standalone)'
 
 on:
+  push:
+    branches:
+      - patch-emudhra-compromise
   workflow_dispatch:
 
 jobs:
